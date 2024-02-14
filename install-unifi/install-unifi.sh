@@ -4,13 +4,14 @@
 # Installs the Uni-Fi controller software on a FreeBSD machine (presumably running pfSense).
 
 # The latest version of UniFi:
-UNIFI_SOFTWARE_URL="https://dl.ui.com/unifi/7.2.97/UniFi.unix.zip"
-
+UNIFI_SOFTWARE_URL="https://dl.ui.com/unifi/7.5.187-f57f5bf7ab/UniFi.unix.zip"
 
 # The rc script associated with this branch or fork:
 RC_SCRIPT_URL="https://raw.githubusercontent.com/unofficial-unifi/unifi-pfsense/master/rc.d/unifi.sh"
 
-CURRENT_MONGODB_VERSION=mongodb50
+# List of valid/supported mongodb package names, sorted with the latest being first
+# As UniFi adds support for new mongodb versions, just prepend them to this list
+SUPPORTED_MONGODB_PACKAGES="mongodb50 mongodb44 mongodb42 mongodb40 mongodb36 mongodb34 mongodb32 mongodb"
 
 # If pkg-ng is not yet installed, bootstrap it:
 if ! /usr/sbin/pkg -N 2> /dev/null; then
@@ -30,9 +31,6 @@ ABI=`/usr/sbin/pkg config abi`
 
 # FreeBSD package source:
 FREEBSD_PACKAGE_URL="https://pkg.freebsd.org/${ABI}/latest/"
-
-# FreeBSD package list:
-FREEBSD_PACKAGE_LIST_URL="${FREEBSD_PACKAGE_URL}packagesite.pkg"
 
 # Stop the controller if it's already running...
 # First let's try the rc script if it exists:
@@ -84,16 +82,39 @@ echo -n "Mounting new filesystems..."
 /sbin/mount -a
 echo " done."
 
-
-echo "Removing discontinued packages..."
-old_mongos=`pkg info | grep mongodb | grep -v ${CURRENT_MONGODB_VERSION}`
-for old_mongo in "${old_mongos}"; do
-  package=`echo "$old_mongo" | cut -d' ' -f1`
-  pkg unlock -yq ${package}
-  env ASSUME_ALWAYS_YES=YES /usr/sbin/pkg delete ${package}
+echo "Gathering package list from remote repository..."
+# Build a list of possible packagesite.* URLs
+for ext in pkg txz; do
+  FREEBSD_PACKAGE_LIST_URLS="$FREEBSD_PACKAGE_LIST_URLS ${FREEBSD_PACKAGE_URL}packagesite.${ext}"
 done
-echo " done."
+# Try each of the URLs in the list and exit if they all fail
+if ! fetch -q1o - $FREEBSD_PACKAGE_LIST_URLS > packagesite.pkg 2> /dev/null; then
+  echo "Error downloading $FREEBSD_PACKAGE_LIST_URLS"
+  exit 1
+fi
+tar fx packagesite.pkg || exit 1
+echo "Done."
 
+
+# Find the latest supported mongodb version that's available in the repository
+for package_name in $SUPPORTED_MONGODB_PACKAGES; do
+  if grep -q "\"name\":\"$package_name\"" packagesite.yaml; then
+    CURRENT_MONGODB_VERSION="$package_name"
+    break
+  fi
+done
+
+if [ ! -z "$CURRENT_MONGODB_VERSION" ]; then
+  echo "Removing discontinued packages..."
+  pkg info | grep mongodb | grep -v ${CURRENT_MONGODB_VERSION} | while read -r old_mongo; do
+    package=`echo "$old_mongo" | cut -d' ' -f1`
+    pkg unlock -yq ${package}
+    env ASSUME_ALWAYS_YES=YES /usr/sbin/pkg delete ${package}
+  done
+  echo " done."
+else
+  echo "Could not locate a valid mongodb package"
+fi
 
 
 # Install mongodb, OpenJDK, and unzip (required to unpack Ubiquiti's download):
@@ -102,15 +123,14 @@ echo "Installing required packages..."
 #uncomment below for pfSense 2.2.x:
 #env ASSUME_ALWAYS_YES=YES /usr/sbin/pkg install mongodb openjdk unzip pcre v8 snappy
 
-fetch ${FREEBSD_PACKAGE_LIST_URL}
-tar vfx packagesite.pkg
-
 AddPkg () {
   pkgname=$1
+  base_url=${2:-$FREEBSD_PACKAGE_URL}
   pkg unlock -yq $pkgname
   pkginfo=`grep "\"name\":\"$pkgname\"" packagesite.yaml`
   pkgvers=`echo $pkginfo | pcregrep -o1 '"version":"(.*?)"' | head -1`
-  pkgurl="${FREEBSD_PACKAGE_URL}`echo $pkginfo | pcregrep -o1 '"path":"(.*?)"' | head -1`"
+  #pkgurl="${FREEBSD_PACKAGE_URL}`echo $pkginfo | pcregrep -o1 '"path":"(.*?)"' | head -1`"
+  pkgurl="${base_url}`echo $pkginfo | pcregrep -o1 '"path":"(.*?)"' | head -1`"
 
   # compare version for update/install
   if [ `pkg info | grep -c $pkgname-$pkgvers` -eq 1 ]; then
@@ -130,11 +150,16 @@ AddPkg () {
 #Add the following Packages for installation or reinstallation (if something was removed)
 AddPkg png
 AddPkg brotli
+AddPkg jpeg-turbo
+AddPkg zstd
+AddPkg libdeflate
+AddPkg jbigkit
+AddPkg tiff
 AddPkg freetype2
 AddPkg fontconfig
 AddPkg alsa-lib
 AddPkg mpdecimal
-AddPkg python37
+AddPkg python39
 AddPkg libfontenc
 AddPkg mkfontscale
 AddPkg dejavu
@@ -157,10 +182,23 @@ AddPkg javavmwrapper
 AddPkg java-zoneinfo
 AddPkg openjdk8
 AddPkg snappyjava
+AddPkg lcms2
+AddPkg libXrandr
+AddPkg encodings
+AddPkg font-bh-ttf
+AddPkg font-misc-ethiopic
+AddPkg font-misc-meltho
+AddPkg xorg-fonts-truetype
+AddPkg graphite2
+AddPkg harfbuzz
+AddPkg openjdk17
 AddPkg snappy
 AddPkg cyrus-sasl
 AddPkg icu
 AddPkg boost-libs
+AddPkg libunwind
+AddPkg snowballstemmer
+AddPkg yaml-cpp
 AddPkg ${CURRENT_MONGODB_VERSION}
 AddPkg unzip
 AddPkg pcre
